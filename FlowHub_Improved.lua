@@ -18,8 +18,9 @@ local Camera = Workspace.CurrentCamera
 local Mouse = LocalPlayer:GetMouse()
 
 -- Nettoyage si déjà chargé
-if game.CoreGui:FindFirstChild("FlowHub") then
-    game.CoreGui:FindFirstChild("FlowHub"):Destroy()
+local _guiId = "FH_" .. math.random(1000, 9999)
+if game.CoreGui:FindFirstChild(_guiId) then
+    game.CoreGui:FindFirstChild(_guiId):Destroy()
 end
 
 -- ═══════════════════════════════════════════
@@ -168,7 +169,7 @@ end
 -- ═══════════════════════════════════════════
 
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FlowHub"
+ScreenGui.Name = _guiId
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = game.CoreGui
@@ -1579,31 +1580,77 @@ task.spawn(function()
     end
 end)
 
--- Systeme de clic
-local VIM = nil
+-- Systeme de clic (methodes anti-detection)
+local remoteParry = nil
+
+local function TrouverRemote()
+    if remoteParry then return remoteParry end
+    local mots = {"parry", "deflect", "block", "click", "hit"}
+    local endroits = {game:GetService("ReplicatedStorage")}
+    for _, nom in ipairs({"Remotes", "Events", "GameEvents", "Shared", "Network"}) do
+        local d = game:GetService("ReplicatedStorage"):FindFirstChild(nom)
+        if d then table.insert(endroits, d) end
+    end
+    for _, mot in ipairs(mots) do
+        for _, endroit in ipairs(endroits) do
+            for _, obj in ipairs(endroit:GetDescendants()) do
+                if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction"))
+                    and obj.Name:lower():find(mot) then
+                    remoteParry = obj
+                    return obj
+                end
+            end
+        end
+    end
+    return nil
+end
 
 local function ClicBrut()
-    if type(mouse1click) == "function" and pcall(mouse1click) then return true end
-    if type(keypress) == "function" and type(keyrelease) == "function" then
-        task.spawn(function()
-            pcall(keypress, 0x46)
-            task.wait(0.03)
-            pcall(keyrelease, 0x46)
-        end)
-        return true
-    end
-    local ok = pcall(function()
-        VIM = VIM or game:GetService("VirtualInputManager")
-        VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    -- Methode 1 : firesignal sur le clic souris (indetectable)
+    local ok1 = pcall(function()
+        local mouse = LocalPlayer:GetMouse()
+        if firesignal then
+            firesignal(mouse.Button1Down)
+            return true
+        end
     end)
-    if ok then return true end
-    pcall(function()
-        local vu = game:GetService("VirtualUser")
-        vu:Button1Down(Vector2.new(0, 0), Camera.CFrame)
-        task.defer(function()
-            vu:Button1Up(Vector2.new(0, 0), Camera.CFrame)
+    if ok1 then return true end
+
+    -- Methode 2 : remote du jeu directement
+    local remote = TrouverRemote()
+    if remote then
+        local ok2 = pcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer()
+            else
+                remote:InvokeServer()
+            end
         end)
+        if ok2 then return true end
+    end
+
+    -- Methode 3 : firesignal sur UserInputService
+    local ok3 = pcall(function()
+        if firesignal then
+            local uis = game:GetService("UserInputService")
+            local inp = Instance.new("InputObject")
+            inp.UserInputType = Enum.UserInputType.MouseButton1
+            inp.UserInputState = Enum.UserInputState.Begin
+            firesignal(uis.InputBegan, inp, false)
+            task.defer(function()
+                inp.UserInputState = Enum.UserInputState.End
+                firesignal(uis.InputEnded, inp, false)
+            end)
+        end
+    end)
+    if ok3 then return true end
+
+    -- Methode 4 : click sur le mouse (dernier recours)
+    pcall(function()
+        local mouse = LocalPlayer:GetMouse()
+        if mouse.Click then
+            firesignal(mouse.Button1Down)
+        end
     end)
     return true
 end
@@ -1621,20 +1668,7 @@ local function Cliquer(estSpam)
     return true
 end
 
--- Zone visuelle
-local sphereParry = nil
-task.spawn(function()
-    sphereParry = Instance.new("Part")
-    sphereParry.Name = "FlowParryZone"
-    sphereParry.Shape = Enum.PartType.Ball
-    sphereParry.Anchored = true
-    sphereParry.CanCollide = false
-    sphereParry.CastShadow = false
-    sphereParry.Material = Enum.Material.ForceField
-    sphereParry.Color = Theme.Accent
-    sphereParry.Transparency = 1
-    sphereParry.Parent = Workspace
-end)
+-- Pas de Part dans Workspace (anti-detection BAC)
 
 -- Evaluation d'une balle
 local function EvaluerBalle(part, st, now, posJoueur, seuil)
@@ -1696,10 +1730,7 @@ end
 local frameNum = 0
 
 Connections.autoParry = RunService.RenderStepped:Connect(function()
-    if not Config.AutoParry then
-        if sphereParry then sphereParry.Transparency = 1 end
-        return
-    end
+    if not Config.AutoParry then return end
 
     frameNum = frameNum + 1
     local now = tick()
@@ -1742,24 +1773,7 @@ Connections.autoParry = RunService.RenderStepped:Connect(function()
         end
     end
 
-    if sphereParry and Config.ParryVisualize then
-        sphereParry.Position = posJoueur
-        local t = Config.AutoParryDistance * 2
-        sphereParry.Size = Vector3.new(t, t, t)
-
-        if meilleureEta < seuil then
-            sphereParry.Color = Color3.fromRGB(255, 30, 30)
-            sphereParry.Transparency = 0.65
-        elseif meilleureDist < Config.AutoParryDistance * 2 then
-            sphereParry.Color = Color3.fromRGB(255, 165, 0)
-            sphereParry.Transparency = 0.78
-        else
-            sphereParry.Color = Theme.Accent
-            sphereParry.Transparency = 0.9
-        end
-    elseif sphereParry then
-        sphereParry.Transparency = 1
-    end
+    -- Visualisation retiree (anti-BAC)
 
     if #aParry > 0 and now - lastParryTime >= 0.15 then
         if Cliquer(false) then
@@ -1798,7 +1812,7 @@ local function CreateESP(player)
         if not humanoid or not rootPart then return end
 
         local highlight = Instance.new("Highlight")
-        highlight.Name = "FlowESP"
+        highlight.Name = "HL_" .. math.random(1000, 9999)
         highlight.FillColor = Config.ESPColor
         highlight.FillTransparency = 0.7
         highlight.OutlineColor = Config.ESPColor
@@ -1808,7 +1822,7 @@ local function CreateESP(player)
         table.insert(ESPObjects, highlight)
 
         local billboard = Instance.new("BillboardGui")
-        billboard.Name = "FlowESPInfo"
+        billboard.Name = "BB_" .. math.random(1000, 9999)
         billboard.Size = UDim2.new(0, 150, 0, 40)
         billboard.StudsOffset = Vector3.new(0, 3, 0)
         billboard.AlwaysOnTop = true
@@ -1997,14 +2011,14 @@ Mouse.Button2Down:Connect(function()
     end
 end)
 
--- Anti-AFK
+-- Anti-AFK (methode safe)
 if Config.AntiAFK then
-    local vu = game:GetService("VirtualUser")
     Players.LocalPlayer.Idled:Connect(function()
         if Config.AntiAFK then
-            vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-            task.wait(1)
-            vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            pcall(function()
+                local r = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if r then r.CFrame = r.CFrame * CFrame.new(0, 0.1, 0) end
+            end)
         end
     end)
 end
