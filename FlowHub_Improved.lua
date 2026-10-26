@@ -1605,54 +1605,63 @@ local function TrouverRemote()
     return nil
 end
 
-local function ClicBrut()
-    -- Methode 1 : firesignal sur le clic souris (indetectable)
-    local ok1 = pcall(function()
-        local mouse = LocalPlayer:GetMouse()
-        if firesignal then
-            firesignal(mouse.Button1Down)
-            return true
-        end
-    end)
-    if ok1 then return true end
+local VIM_Parry = nil
 
-    -- Methode 2 : remote du jeu directement
+local function ClicBrut()
+    -- Methode 1 : mouse1click (Solara, Fluxus, Delta, etc.)
+    if type(mouse1click) == "function" then
+        local ok = pcall(mouse1click)
+        if ok then return true end
+    end
+
+    -- Methode 2 : VirtualInputManager (compatible la plupart des executors)
+    local ok2 = pcall(function()
+        if not VIM_Parry then
+            VIM_Parry = game:GetService("VirtualInputManager")
+        end
+        VIM_Parry:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        task.defer(function()
+            pcall(function()
+                VIM_Parry:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end)
+        end)
+    end)
+    if ok2 then return true end
+
+    -- Methode 3 : remote du jeu directement
     local remote = TrouverRemote()
     if remote then
-        local ok2 = pcall(function()
+        local ok3 = pcall(function()
             if remote:IsA("RemoteEvent") then
                 remote:FireServer()
             else
                 remote:InvokeServer()
             end
         end)
-        if ok2 then return true end
+        if ok3 then return true end
     end
 
-    -- Methode 3 : firesignal sur UserInputService
-    local ok3 = pcall(function()
-        if firesignal then
-            local uis = game:GetService("UserInputService")
-            local inp = Instance.new("InputObject")
-            inp.UserInputType = Enum.UserInputType.MouseButton1
-            inp.UserInputState = Enum.UserInputState.Begin
-            firesignal(uis.InputBegan, inp, false)
-            task.defer(function()
-                inp.UserInputState = Enum.UserInputState.End
-                firesignal(uis.InputEnded, inp, false)
-            end)
-        end
-    end)
-    if ok3 then return true end
-
-    -- Methode 4 : click sur le mouse (dernier recours)
-    pcall(function()
-        local mouse = LocalPlayer:GetMouse()
-        if mouse.Click then
+    -- Methode 4 : firesignal si disponible (Synapse, etc.)
+    if type(firesignal) == "function" then
+        local ok4 = pcall(function()
+            local mouse = LocalPlayer:GetMouse()
             firesignal(mouse.Button1Down)
-        end
-    end)
-    return true
+        end)
+        if ok4 then return true end
+    end
+
+    -- Methode 5 : keypress F comme fallback
+    if type(keypress) == "function" then
+        pcall(function()
+            keypress(0x46)
+            task.defer(function()
+                pcall(keyrelease, 0x46)
+            end)
+        end)
+        return true
+    end
+
+    return false
 end
 
 local function Cliquer(estSpam)
